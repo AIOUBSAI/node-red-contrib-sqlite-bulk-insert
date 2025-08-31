@@ -7,7 +7,7 @@ Generic high-speed **SQLite INSERT / UPSERT** node for Node-RED with:
 - Transactions (all / chunked / off), optional PRAGMAs
 - Optional **RETURNING** of inserted/affected rows with IDs (SQLite ≥ 3.35)
 
-> Built to replace ad-hoc Function nodes for bulk inserts like `INSERT OR IGNORE INTO Train_Position(name) VALUES (?)` while remaining fully declarative and safe.
+> Built to replace ad-hoc Function nodes for bulk inserts like `INSERT OR IGNORE INTO table(name) VALUES (?)` while remaining fully declarative and safe.
 
 ---
 
@@ -35,22 +35,22 @@ Requires:
 * type: `msg`
 * value: `data.const.paths.databasePath`
 
-3. Set **Table**: `Train_Position`.
+3. Set **Table**: `table`.
 
 4. Choose a **Source**:
 
 * **JSONata** (no extra Function):
-  Produces rows `[{ "name": "..." }]` from `Layout` (C\* columns; `;` split; filtered by project/diagram):
+  Produces rows `[{ "name": "..." }]` from `table` (C\* columns; `;` split; filtered etc :
 
   ```jsonata
   (
-    $pn := data.const.projectName;
-    $dg := data.const.projectDiagram;
-    $rows := data.data.input.config.tables.Layout;
+    $pn := data.const.var1;
+    $dg := data.const.var2;
+    $rows := data;
 
     $filtered := $rows[
       $contains($split(Project, ';').$trim(), $pn) and
-      $contains(Layout, $dg)
+      $contains(table, $dg)
     ];
 
     $vals := $distinct(
@@ -75,7 +75,7 @@ Requires:
 7. (Optional) **preSQL**:
 
    ```sql
-   CREATE TABLE IF NOT EXISTS Train_Position(
+   CREATE TABLE IF NOT EXISTS table(
      id   INTEGER PRIMARY KEY,
      name TEXT UNIQUE
    );
@@ -144,7 +144,7 @@ Run your flow. The node writes a summary to `msg.sqlite`, and optionally the ret
 ```json
 {
   "ok": true,
-  "table": "Train_Position",
+  "table": "table",
   "counts": { "inserted": 12, "updated": 0, "skipped": 0, "errors": 0, "total": 12 },
   "firstInsertId": 101,
   "lastInsertId": 112,
