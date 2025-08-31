@@ -175,7 +175,7 @@ Run your flow. The node writes a summary to `msg.sqlite`, and optionally the ret
 
 ## Changelog
 
-* **1.0.0** – Initial release.
+* **0.1.0** – Initial release.
 
 ---
 
