@@ -173,12 +173,6 @@ Run your flow. The node writes a summary to `msg.sqlite`, and optionally the ret
 
 ---
 
-## Changelog
-
-* **0.1.0** – Initial release.
-
----
-
 ## License
 
 [MIT](LICENSE)
