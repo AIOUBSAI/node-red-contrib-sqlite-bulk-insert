@@ -1,0 +1,490 @@
+<!-- sqlite-bulk-insert.html -->
+<style>
+  .sbi { --b: var(--nr-editor-border,#e3e3e3); --bg: var(--nr-editor-dialog-background,#fff); --muted: rgba(0,0,0,.55); }
+  .sbi .row { margin: 10px 0; }
+  .sbi label { display:block; font-size:12px; font-weight:600; color: var(--muted); text-transform: uppercase; margin-bottom:6px; }
+  .sbi input[type="text"], .sbi select, .sbi textarea {
+    width:100% !important; box-sizing:border-box; border:1px solid var(--b); border-radius:0px; padding:8px 10px; height:34px; background:var(--bg);
+  }
+  .sbi textarea { height:86px; resize:vertical; }
+  .sbi .inline { display:grid; gap:10px; }
+  @media (min-width: 980px){ .sbi .inline.cols-2{ grid-template-columns: 1fr 1fr; } .sbi .inline.cols-3{ grid-template-columns: 1fr 1fr 1fr; } }
+  .sbi .card { border:1px solid var(--b); border-radius:0px; padding:10px 12px; background:var(--nr-editor-sidebar-background,#f8f9fb); }
+  .sbi .toolbar { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  .sbi .toolbar .spacer { flex:1; }
+  .sbi table { width:100%; border-collapse: collapse; }
+  .sbi th, .sbi td { border-bottom:1px solid var(--b); padding:6px 4px; }
+  .sbi thead th { background: var(--nr-editor-button-background,#f6f6f6); font-weight:700; }
+  .sbi .right { text-align:right; }
+  .sbi .nr-disabled { opacity:.55; pointer-events:none; }
+  .sbi .hint { font-size:12px; color: var(--muted); }
+  .sbi .btn-link { background:transparent; border:none; color:var(--nr-primary-text-color,#c00); cursor:pointer; padding:0 6px; }
+  .sbi .chipline { display:flex; gap:8px; align-items:center; }
+  .sbi .caps { text-transform:uppercase; font-weight:700; font-size:12px; opacity:.75; }
+</style>
+
+<script type="text/x-red" data-template-name="sqlite-bulk-insert">
+  <div class="sbi">
+    <!-- Name -->
+    <div class="row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+      <input type="text" id="node-input-name" placeholder="sqlite-bulk-insert">
+    </div>
+
+    <!-- Connection -->
+    <div class="row card">
+      <div class="inline cols-3">
+        <div>
+          <label><i class="fa fa-database"></i> Database path</label>
+          <input type="text" id="node-input-dbPath">
+          <input type="hidden" id="node-input-dbPathType">
+          <div class="hint">Types: str · msg · flow · global · env</div>
+        </div>
+        <div>
+          <label>PRAGMA: journal_mode WAL</label>
+          <label class="chipline"><input type="checkbox" id="node-input-pragmasWal"> <span>Enable WAL</span></label>
+        </div>
+        <div>
+          <label>PRAGMA: synchronous</label>
+          <select id="node-input-pragmasSync">
+            <option value="">(default)</option>
+            <option value="OFF">OFF</option>
+            <option value="NORMAL">NORMAL</option>
+            <option value="FULL">FULL</option>
+            <option value="EXTRA">EXTRA</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <label>Extra PRAGMAs (optional; ; separated)</label>
+        <input type="text" id="node-input-pragmasExtra" placeholder="temp_store=MEMORY; cache_size=20000">
+      </div>
+    </div>
+
+    <!-- Source -->
+    <div class="row card">
+      <div class="inline cols-2">
+        <div>
+          <label><i class="fa fa-sign-in"></i> Records source (array or object)</label>
+          <input type="text" id="node-input-source" placeholder="payload">
+          <input type="hidden" id="node-input-sourceType">
+          <div class="hint">Use <b>msg/flow/global</b> path or <b>JSONata</b> to compute rows. If a single object is returned, it will be wrapped into an array.</div>
+        </div>
+        <div>
+          <label><i class="fa fa-table"></i> Table name</label>
+          <input type="text" id="node-input-table" placeholder="MyTable">
+          <div class="hint">Must be a valid SQLite identifier (letters, digits, underscore; cannot start with digit).</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mapping -->
+    <div class="row card">
+      <div class="chipline">
+        <span class="caps">Mapping</span>
+        <label style="margin-left:auto;"><input type="checkbox" id="node-input-autoMap"> Auto-map from row object keys</label>
+      </div>
+
+      <table id="sbi-map">
+        <thead>
+          <tr>
+            <th style="width:180px">Column</th>
+            <th>Source</th>
+            <th style="width:160px">Transform</th>
+            <th style="width:84px" class="right">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="toolbar">
+        <button class="red-ui-button" id="sbi-map-add"><i class="fa fa-plus"></i> Add column</button>
+        <span class="spacer"></span>
+        <span class="hint">Transforms: none · trim · upper · lower · nz (empty/NA→null) · bool01 · number · string</span>
+      </div>
+    </div>
+
+    <!-- Conflict -->
+    <div class="row card">
+      <div class="inline cols-3">
+        <div>
+          <label><i class="fa fa-random"></i> Conflict strategy</label>
+          <select id="node-input-conflictStrategy">
+            <option value="none">None (INSERT)</option>
+            <option value="ignore">OR IGNORE</option>
+            <option value="replace">OR REPLACE</option>
+            <option value="upsert">UPSERT (ON CONFLICT DO UPDATE)</option>
+          </select>
+        </div>
+        <div id="sbi-upsert-keys-wrap">
+          <label>UPSERT key columns (comma)</label>
+          <input type="text" id="node-input-conflictKeys" placeholder="key1, key2">
+        </div>
+        <div id="sbi-upsert-update-wrap">
+          <label>UPSERT update columns (comma)</label>
+          <input type="text" id="node-input-conflictUpdateCols" placeholder="colA, colB">
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="red-ui-button btn-link" id="sbi-fill-keys" title="Fill keys from mapping columns">Use mapping cols</button>
+        <button class="red-ui-button btn-link" id="sbi-fill-update" title="Fill update columns from mapping columns">Use mapping cols</button>
+      </div>
+    </div>
+
+    <!-- Transaction -->
+    <div class="row card">
+      <div class="inline cols-3">
+        <div>
+          <label><i class="fa fa-exchange"></i> Transaction mode</label>
+          <select id="node-input-txMode">
+            <option value="all">All rows in one transaction</option>
+            <option value="chunk">Chunks</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <div id="sbi-chunk-wrap">
+          <label>Chunk size</label>
+          <input type="text" id="node-input-txChunkSize" placeholder="500">
+        </div>
+        <div>
+          <label>On error</label>
+          <label class="chipline"><input type="checkbox" id="node-input-txContinueOnError"> Continue on error (collect counts)</label>
+        </div>
+      </div>
+      <div class="inline cols-2" style="margin-top:8px">
+        <div>
+          <label>preSQL (optional)</label>
+          <textarea id="node-input-txPreSQL" placeholder="PRAGMA temp_store=MEMORY;"></textarea>
+        </div>
+        <div>
+          <label>postSQL (optional)</label>
+          <textarea id="node-input-txPostSQL" placeholder=""></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output -->
+    <div class="row card">
+      <div class="inline cols-2">
+        <div>
+          <label><i class="fa fa-sign-out"></i> Summary output path</label>
+          <input type="text" id="node-input-outPath" placeholder="sqlite">
+          <input type="hidden" id="node-input-outPathType">
+          <div class="hint">Where the summary object will be written (e.g. <code>msg.sqlite</code>).</div>
+        </div>
+        <div>
+          <label><i class="fa fa-undo"></i> Return rows</label>
+          <div class="inline cols-3">
+            <div>
+              <select id="node-input-retMode">
+                <option value="none">(don’t return rows)</option>
+                <option value="inserted">Inserted</option>
+                <option value="affected">Affected (inserted + upserts)</option>
+              </select>
+            </div>
+            <div>
+              <input type="text" id="node-input-retIdCol" placeholder="id">
+              <div class="hint">ID column (or <code>rowid</code>)</div>
+            </div>
+            <div>
+              <input type="text" id="node-input-retPath" placeholder="sqlite.rows">
+              <input type="hidden" id="node-input-retPathType">
+              <div class="hint">Where to write returned rows</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</script>
+
+<script type="text/x-red" data-help-name="sqlite-bulk-insert">
+  <p><b>sqlite-bulk-insert</b> — Generic high-speed SQLite INSERT/UPSERT with mapping and JSONata row building.</p>
+  <p><b>Key features</b>:</p>
+  <ul>
+    <li>Typed DB/source/return paths (msg/flow/global/env/jsonata)</li>
+    <li>Mapping grid (column → source) with transforms (trim/upper/lower/nz/bool01/number/string)</li>
+    <li>Conflict strategies: None · OR IGNORE · OR REPLACE · UPSERT (keys + update cols)</li>
+    <li>Transaction: All / Chunked / Off, continue-on-error, pre/post SQL</li>
+    <li>Optional <i>RETURNING</i> (SQLite ≥ 3.35) to capture inserted/affected rows with ids (fallback supported)</li>
+  </ul>
+  <p><b>Outputs</b>:</p>
+  <pre>
+msg.sqlite = {
+  ok, table,
+  counts: { inserted, updated, skipped, errors, total },
+  firstInsertId, lastInsertId,
+  timings: { msOpen, msExec, msTotal }
+}
+# if enabled
+msg["sqlite.rows"] = [{ action:'inserted|updated', id, data: {...} }, ...]
+  </pre>
+  <p><b>Notes</b>:</p>
+  <ul>
+    <li>When <i>Auto-map</i> is enabled, columns are taken from object keys in your rows.</li>
+    <li>UPSERT on older SQLite (without RETURNING) uses key lookup to fetch ids of updated rows.</li>
+    <li>All values are parameterised; identifiers are sanitised.</li>
+  </ul>
+</script>
+
+<script type="text/javascript">
+(function(){
+  const NODE_TYPE = "sqlite-bulk-insert";
+
+  function splitCsv(s){
+    return String(s||"").split(",").map(x=>x.trim()).filter(Boolean);
+  }
+  function joinCsv(a){
+    return (Array.isArray(a)?a:[]).join(", ");
+  }
+
+  function makeTyped($input, types, $typeField, defVal, defType){
+    $input.typedInput({ default:defType, types: types, typeField: $typeField });
+    if (defType) $input.typedInput('type', defType);
+    if (defVal!==undefined) $input.typedInput('value', defVal);
+  }
+
+  function addMapRow($tbody, row){
+    const r = Object.assign({ column:"", srcType:"path", src:"", transform:"none" }, row||{});
+    const $tr = $(`
+      <tr>
+        <td><input type="text" class="sbi-col" placeholder="column"></td>
+        <td><input type="text" class="sbi-src"><input type="hidden" class="sbi-srcType"></td>
+        <td>
+          <select class="sbi-tx">
+            <option value="none">none</option>
+            <option value="trim">trim</option>
+            <option value="upper">upper</option>
+            <option value="lower">lower</option>
+            <option value="nz">nz (empty/NA→null)</option>
+            <option value="bool01">bool01</option>
+            <option value="number">number</option>
+            <option value="string">string</option>
+          </select>
+        </td>
+        <td class="right">
+          <button class="red-ui-button red-ui-button-small sbi-del"><i class="fa fa-trash"></i></button>
+        </td>
+      </tr>
+    `);
+    // column
+    $(".sbi-col", $tr).val(r.column);
+    // src typed
+    const $src = $(".sbi-src", $tr);
+    const $srcType = $(".sbi-srcType", $tr);
+    $src.typedInput({
+      default: r.srcType || "path",
+      types: [
+        {value:"path",label:"path",icon:"fa fa-dot-circle-o"},
+        "jsonata","msg","flow","global","env","str","num","bool","json"
+      ],
+      typeField: $srcType
+    });
+    $src.typedInput('type', r.srcType || "path");
+    $src.typedInput('value', r.src);
+
+    // transform
+    $(".sbi-tx", $tr).val(r.transform || "none");
+
+    // delete
+    $(".sbi-del", $tr).on("click", ()=>{ $tr.remove(); });
+
+    $tbody.append($tr);
+  }
+
+  function collectMapping($tbody){
+    const out = [];
+    $tbody.find("tr").each(function(){
+      const $tr = $(this);
+      const column = $(".sbi-col",$tr).val().trim();
+      const src = $(".sbi-src",$tr).typedInput('value');
+      const srcType = $(".sbi-src",$tr).typedInput('type');
+      const transform = $(".sbi-tx",$tr).val();
+      if (column) out.push({ column, srcType, src, transform });
+    });
+    return out;
+  }
+
+  function mappingColumns($tbody){
+    return collectMapping($tbody).map(m => m.column);
+  }
+
+  function toggleAutoMapUI(isAuto){
+    $("#sbi-map").toggleClass("nr-disabled", isAuto);
+    $("#sbi-map-add").prop("disabled", isAuto);
+  }
+
+  function toggleUpsertUI(strategy){
+    const on = (strategy === "upsert");
+    $("#sbi-upsert-keys-wrap, #sbi-upsert-update-wrap").toggle(on);
+  }
+
+  function toggleChunkUI(mode){
+    $("#sbi-chunk-wrap").toggle(mode==="chunk");
+  }
+
+  RED.nodes.registerType(NODE_TYPE, {
+    category: 'storage',
+    color: '#E6F2FF',
+    icon: 'font-awesome/fa-database',
+    paletteLabel: 'sqlite bulk insert',
+    defaults: {
+      name: { value:"" },
+      dbPath: { value:"" },
+      dbPathType: { value:"str" },
+      pragmas: { value: { wal:false, sync:"", extra:"" } },
+      source: { value:"payload" },
+      sourceType: { value:"msg" },
+      table: { value:"" },
+      autoMap: { value:false },
+      mapping: { value:[] },
+      conflict: { value: { strategy:"none", keys:[], updateCols:[] } },
+      tx: { value: { mode:"all", chunkSize:500, continueOnError:false, preSQL:"", postSQL:"" } },
+      out: { value: { pathType:"msg", path:"sqlite" } },
+      ret: { value: { mode:"none", idCol:"id", pathType:"msg", path:"sqlite.rows" } }
+    },
+    inputs: 1,
+    outputs: 1,
+    label: function(){ return this.name || 'sqlite-bulk-insert'; },
+
+    oneditprepare: function(){
+      const self = this;
+
+      // typed inputs
+      makeTyped(
+        $("#node-input-dbPath"),
+        ["str","msg","flow","global","env"],
+        $("#node-input-dbPathType"),
+        self.dbPath, self.dbPathType || "str"
+      );
+
+      makeTyped(
+        $("#node-input-source"),
+        ["msg","flow","global","jsonata","str"],
+        $("#node-input-sourceType"),
+        self.source, self.sourceType || "msg"
+      );
+
+      makeTyped(
+        $("#node-input-outPath"),
+        ["msg","flow","global"],
+        $("#node-input-outPathType"),
+        (self.out && self.out.path) || "sqlite",
+        (self.out && self.out.pathType) || "msg"
+      );
+
+      makeTyped(
+        $("#node-input-retPath"),
+        ["msg","flow","global"],
+        $("#node-input-retPathType"),
+        (self.ret && self.ret.path) || "sqlite.rows",
+        (self.ret && self.ret.pathType) || "msg"
+      );
+
+      // PRAGMAs
+      $("#node-input-pragmasWal").prop("checked", !!(self.pragmas && self.pragmas.wal));
+      $("#node-input-pragmasSync").val((self.pragmas && self.pragmas.sync) || "");
+      $("#node-input-pragmasExtra").val((self.pragmas && self.pragmas.extra) || "");
+
+      // base fields
+      $("#node-input-table").val(self.table || "");
+      $("#node-input-autoMap").prop("checked", !!self.autoMap);
+
+      // mapping grid
+      const $tbody = $("#sbi-map tbody");
+      $tbody.empty();
+      (Array.isArray(self.mapping) ? self.mapping : []).forEach(m => addMapRow($tbody, m));
+      $("#sbi-map-add").on("click", ()=> addMapRow($tbody));
+
+      $("#node-input-autoMap").on("change", function(){
+        toggleAutoMapUI($(this).is(":checked"));
+      });
+      toggleAutoMapUI($("#node-input-autoMap").is(":checked"));
+
+      // conflict
+      const strategy = (self.conflict && self.conflict.strategy) || "none";
+      $("#node-input-conflictStrategy").val(strategy);
+      $("#node-input-conflictKeys").val(joinCsv(self.conflict && self.conflict.keys));
+      $("#node-input-conflictUpdateCols").val(joinCsv(self.conflict && self.conflict.updateCols));
+      toggleUpsertUI(strategy);
+      $("#node-input-conflictStrategy").on("change", function(){ toggleUpsertUI($(this).val()); });
+
+      // fill keys/update from mapping cols
+      $("#sbi-fill-keys").on("click", function(){
+        const cols = mappingColumns($tbody);
+        if (cols.length) $("#node-input-conflictKeys").val(cols.join(", "));
+      });
+      $("#sbi-fill-update").on("click", function(){
+        const cols = mappingColumns($tbody);
+        if (cols.length) $("#node-input-conflictUpdateCols").val(cols.join(", "));
+      });
+
+      // transaction
+      const tx = self.tx || {};
+      $("#node-input-txMode").val(tx.mode || "all");
+      $("#node-input-txChunkSize").val(Number(tx.chunkSize || 500));
+      $("#node-input-txContinueOnError").prop("checked", !!tx.continueOnError);
+      $("#node-input-txPreSQL").val(tx.preSQL || "");
+      $("#node-input-txPostSQL").val(tx.postSQL || "");
+      toggleChunkUI(tx.mode || "all");
+      $("#node-input-txMode").on("change", function(){ toggleChunkUI($(this).val()); });
+
+      // return / output
+      $("#node-input-retMode").val((self.ret && self.ret.mode) || "none");
+      $("#node-input-retIdCol").val((self.ret && self.ret.idCol) || "id");
+    },
+
+    oneditsave: function(){
+      // PRAGMAs
+      this.pragmas = {
+        wal: $("#node-input-pragmasWal").is(":checked"),
+        sync: $("#node-input-pragmasSync").val() || "",
+        extra: $("#node-input-pragmasExtra").val() || ""
+      };
+
+      // Core
+      this.table = $("#node-input-table").val().trim();
+      this.autoMap = $("#node-input-autoMap").is(":checked");
+
+      // Mapping
+      const $tbody = $("#sbi-map tbody");
+      this.mapping = collectMapping($tbody);
+
+      // Conflict
+      this.conflict = {
+        strategy: $("#node-input-conflictStrategy").val(),
+        keys: splitCsv($("#node-input-conflictKeys").val()),
+        updateCols: splitCsv($("#node-input-conflictUpdateCols").val())
+      };
+
+      // Transaction
+      this.tx = {
+        mode: $("#node-input-txMode").val(),
+        chunkSize: Number($("#node-input-txChunkSize").val() || 500),
+        continueOnError: $("#node-input-txContinueOnError").is(":checked"),
+        preSQL: $("#node-input-txPreSQL").val(),
+        postSQL: $("#node-input-txPostSQL").val()
+      };
+
+      // Typed fields are auto saved by typedInput typeField bindings:
+      this.dbPath     = $("#node-input-dbPath").typedInput('value');
+      this.dbPathType = $("#node-input-dbPath").typedInput('type');
+
+      this.source     = $("#node-input-source").typedInput('value');
+      this.sourceType = $("#node-input-source").typedInput('type');
+
+      this.out = {
+        path: $("#node-input-outPath").typedInput('value'),
+        pathType: $("#node-input-outPath").typedInput('type')
+      };
+
+      this.ret = {
+        mode: $("#node-input-retMode").val(),
+        idCol: $("#node-input-retIdCol").val().trim() || "id",
+        path: $("#node-input-retPath").typedInput('value'),
+        pathType: $("#node-input-retPath").typedInput('type')
+      };
+    }
+  });
+})();
+</script>
